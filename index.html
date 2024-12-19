@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Real-time Image Share</title>
+    <title>P2P Image Share</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.4.7/peerjs.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -26,10 +27,12 @@
             max-width: 1200px;
             display: flex;
             gap: 2rem;
+            flex-wrap: wrap;
         }
 
         .left-panel, .right-panel {
             flex: 1;
+            min-width: 300px;
             background: white;
             padding: 1rem;
             border-radius: 10px;
@@ -46,21 +49,12 @@
             margin-bottom: 0.5rem;
         }
 
-        .connection-status {
+        .status {
             padding: 0.5rem;
             text-align: center;
             margin-bottom: 1rem;
             border-radius: 5px;
-        }
-
-        .connection-status.connected {
-            background-color: #d4edda;
-            color: #155724;
-        }
-
-        .connection-status.disconnected {
-            background-color: #f8d7da;
-            color: #721c24;
+            background-color: #e8f0fe;
         }
 
         .user-id {
@@ -69,15 +63,44 @@
             border-radius: 5px;
             margin-bottom: 1rem;
             word-break: break-all;
+            cursor: pointer;
         }
 
-        .recipient-input {
+        .connection-controls {
+            margin-bottom: 1rem;
+        }
+
+        .input-group {
+            margin-bottom: 1rem;
+        }
+
+        .input-group input {
             width: 100%;
             padding: 0.8rem;
-            margin-bottom: 1rem;
             border: 2px solid #1a73e8;
             border-radius: 5px;
             font-size: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .input-group button {
+            width: 100%;
+            padding: 0.8rem;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+
+        .input-group button:hover {
+            background-color: #185abc;
+        }
+
+        .input-group button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
         }
 
         .drop-zone {
@@ -147,25 +170,20 @@
         }
 
         .send-btn {
-            width: 100%;
-            margin-top: 1rem;
-            padding: 0.8rem;
+            position: absolute;
+            bottom: 5px;
+            right: 5px;
             background-color: #1a73e8;
             color: white;
             border: none;
-            border-radius: 5px;
+            border-radius: 3px;
+            padding: 3px 8px;
             cursor: pointer;
-            font-size: 1rem;
-            transition: background-color 0.3s ease;
+            font-size: 0.9rem;
         }
 
         .send-btn:hover {
             background-color: #185abc;
-        }
-
-        .send-btn:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
         }
 
         .received-images {
@@ -187,27 +205,33 @@
             border-radius: 5px;
             box-shadow: 0 2px 5px rgba(0,0,0,0.2);
             display: none;
+            z-index: 1000;
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>Real-time Image Share</h1>
-        <p>Share images instantly with other devices</p>
+        <h1>P2P Image Share</h1>
+        <p>Share images directly between devices</p>
     </div>
 
     <div class="container">
         <div class="left-panel">
-            <div class="connection-status disconnected">Connecting...</div>
-            <div class="user-id"></div>
-            <input type="text" class="recipient-input" placeholder="Enter recipient's ID">
+            <div class="status">Initializing...</div>
+            <div class="user-id" title="Click to copy">Generating ID...</div>
             
+            <div class="connection-controls">
+                <div class="input-group">
+                    <input type="text" id="connect-id" placeholder="Enter peer ID to connect">
+                    <button id="connect-btn">Connect</button>
+                </div>
+            </div>
+
             <div class="drop-zone">
                 <span class="drop-zone-text">Drop images here or click to upload</span>
             </div>
 
             <div class="preview-container"></div>
-            <button class="send-btn" disabled>Send Images</button>
         </div>
 
         <div class="right-panel">
@@ -219,72 +243,94 @@
     <div class="notification"></div>
 
     <script>
-        // Generate a random user ID
-        const userId = 'user_' + Math.random().toString(36).substr(2, 9);
-        
-        // WebSocket connection
-        const ws = new WebSocket(`wss://demo.piesocket.com/v3/channel_1?api_key=VCXCEuvhGcBDP7XhiJJUDvR1e1D3eiVjgZ9VRiaV&notify_self`);
-        
+        // Initialize PeerJS
+        const peer = new Peer(undefined, {
+            host: '0.peerjs.com',
+            port: 443,
+            secure: true,
+            debug: 2,
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                ]
+            }
+        });
+
+        // DOM Elements
+        const status = document.querySelector('.status');
+        const userIdDisplay = document.querySelector('.user-id');
+        const connectBtn = document.getElementById('connect-btn');
+        const connectInput = document.getElementById('connect-id');
         const dropZone = document.querySelector('.drop-zone');
         const previewContainer = document.querySelector('.preview-container');
-        const sendButton = document.querySelector('.send-btn');
-        const recipientInput = document.querySelector('.recipient-input');
-        const connectionStatus = document.querySelector('.connection-status');
-        const userIdDisplay = document.querySelector('.user-id');
         const receivedImages = document.querySelector('.received-images');
         const notification = document.querySelector('.notification');
+
+        let currentConnection = null;
         const uploadedFiles = new Set();
 
-        // Display user ID
-        userIdDisplay.textContent = `Your ID: ${userId}`;
+        // PeerJS event handlers
+        peer.on('open', (id) => {
+            status.textContent = 'Ready to connect';
+            userIdDisplay.textContent = `Your ID: ${id}`;
+        });
 
-        // WebSocket event handlers
-        ws.onopen = () => {
-            connectionStatus.textContent = 'Connected';
-            connectionStatus.classList.remove('disconnected');
-            connectionStatus.classList.add('connected');
-        };
+        peer.on('connection', (conn) => {
+            handleConnection(conn);
+        });
 
-        ws.onclose = () => {
-            connectionStatus.textContent = 'Disconnected';
-            connectionStatus.classList.remove('connected');
-            connectionStatus.classList.add('disconnected');
-        };
+        peer.on('error', (err) => {
+            status.textContent = `Error: ${err.type}`;
+            showNotification(`Connection error: ${err.type}`);
+            console.error(err);
+        });
 
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            if (data.recipient === userId) {
-                showNotification('New image received!');
-                displayReceivedImage(data.image);
+        // Connection handling
+        connectBtn.addEventListener('click', () => {
+            const peerId = connectInput.value.trim();
+            if (peerId) {
+                const conn = peer.connect(peerId, {
+                    reliable: true
+                });
+                handleConnection(conn);
             }
-        };
+        });
 
-        function showNotification(message) {
-            notification.textContent = message;
-            notification.style.display = 'block';
-            setTimeout(() => {
-                notification.style.display = 'none';
-            }, 3000);
+        function handleConnection(conn) {
+            currentConnection = conn;
+            
+            conn.on('open', () => {
+                status.textContent = 'Connected to peer';
+                showNotification('Connected to peer!');
+            });
+
+            conn.on('data', (data) => {
+                if (data.type === 'image') {
+                    displayReceivedImage(data.image);
+                    showNotification('New image received!');
+                }
+            });
+
+            conn.on('close', () => {
+                status.textContent = 'Connection closed';
+                currentConnection = null;
+                showNotification('Connection closed');
+            });
+
+            conn.on('error', (err) => {
+                status.textContent = 'Connection error';
+                showNotification('Connection error occurred');
+                console.error(err);
+            });
         }
 
-        function displayReceivedImage(dataUrl) {
-            const imgContainer = document.createElement('div');
-            imgContainer.className = 'preview-item';
-            
-            const img = document.createElement('img');
-            img.src = dataUrl;
-            
-            imgContainer.appendChild(img);
-            receivedImages.appendChild(imgContainer);
-        }
-
-        // Prevent default drag behaviors
+        // File handling
         ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
             dropZone.addEventListener(eventName, preventDefaults, false);
             document.body.addEventListener(eventName, preventDefaults, false);
         });
 
-        // Highlight drop zone when dragging over it
         ['dragenter', 'dragover'].forEach(eventName => {
             dropZone.addEventListener(eventName, highlight, false);
         });
@@ -293,7 +339,6 @@
             dropZone.addEventListener(eventName, unhighlight, false);
         });
 
-        // Handle dropped files
         dropZone.addEventListener('drop', handleDrop, false);
         dropZone.addEventListener('click', () => {
             const input = document.createElement('input');
@@ -332,7 +377,6 @@
                     previewFile(file);
                 }
             });
-            updateSendButton();
         }
 
         function previewFile(file) {
@@ -351,46 +395,61 @@
                 removeBtn.onclick = () => {
                     uploadedFiles.delete(file);
                     previewItem.remove();
-                    updateSendButton();
+                };
+
+                const sendBtn = document.createElement('button');
+                sendBtn.className = 'send-btn';
+                sendBtn.innerHTML = 'Send';
+                sendBtn.onclick = () => {
+                    if (currentConnection) {
+                        sendImage(reader.result);
+                    } else {
+                        showNotification('Please connect to a peer first!');
+                    }
                 };
 
                 previewItem.appendChild(img);
                 previewItem.appendChild(removeBtn);
+                previewItem.appendChild(sendBtn);
                 previewContainer.appendChild(previewItem);
             };
         }
 
-        function updateSendButton() {
-            sendButton.disabled = uploadedFiles.size === 0 || !recipientInput.value.trim();
+        function sendImage(dataUrl) {
+            if (currentConnection) {
+                currentConnection.send({
+                    type: 'image',
+                    image: dataUrl
+                });
+                showNotification('Image sent successfully!');
+            }
         }
 
-        recipientInput.addEventListener('input', updateSendButton);
+        function displayReceivedImage(dataUrl) {
+            const imgContainer = document.createElement('div');
+            imgContainer.className = 'preview-item';
+            
+            const img = document.createElement('img');
+            img.src = dataUrl;
+            
+            imgContainer.appendChild(img);
+            receivedImages.appendChild(imgContainer);
+        }
 
-        sendButton.addEventListener('click', () => {
-            const recipient = recipientInput.value.trim();
-            if (!recipient) {
-                alert('Please enter a recipient ID');
-                return;
-            }
+        function showNotification(message) {
+            notification.textContent = message;
+            notification.style.display = 'block';
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 3000);
+        }
 
-            uploadedFiles.forEach(file => {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
-                reader.onloadend = () => {
-                    const message = {
-                        sender: userId,
-                        recipient: recipient,
-                        image: reader.result
-                    };
-                    ws.send(JSON.stringify(message));
-                };
+        // Copy ID functionality
+        userIdDisplay.addEventListener('click', () => {
+            const id = userIdDisplay.textContent.split(': ')[1];
+            navigator.clipboard.writeText(id).then(() => {
+                showNotification('ID copied to clipboard!');
             });
-
-            // Clear the preview container and uploaded files
-            previewContainer.innerHTML = '';
-            uploadedFiles.clear();
-            updateSendButton();
-            showNotification('Images sent successfully!');
         });
     </script>
 </body>
