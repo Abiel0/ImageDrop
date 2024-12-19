@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Image Share</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+
+        body {
+            background-color: #f0f2f5;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 2rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 1200px;
+            display: flex;
+            gap: 2rem;
+        }
+
+        .left-panel, .right-panel {
+            flex: 1;
+            background: white;
+            padding: 1rem;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .header h1 {
+            color: #1a73e8;
+            margin-bottom: 0.5rem;
+        }
+
+        .connection-status {
+            padding: 0.5rem;
+            text-align: center;
+            margin-bottom: 1rem;
+            border-radius: 5px;
+        }
+
+        .connection-status.connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .connection-status.disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        .user-id {
+            padding: 1rem;
+            background-color: #e8f0fe;
+            border-radius: 5px;
+            margin-bottom: 1rem;
+            word-break: break-all;
+        }
+
+        .recipient-input {
+            width: 100%;
+            padding: 0.8rem;
+            margin-bottom: 1rem;
+            border: 2px solid #1a73e8;
+            border-radius: 5px;
+            font-size: 1rem;
+        }
+
+        .drop-zone {
+            width: 100%;
+            height: 200px;
+            padding: 25px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            cursor: pointer;
+            border: 4px dashed #1a73e8;
+            border-radius: 10px;
+            background-color: white;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .drop-zone:hover {
+            background-color: #f8f9fa;
+        }
+
+        .drop-zone.dragover {
+            background-color: #e8f0fe;
+            border-color: #185abc;
+        }
+
+        .preview-container {
+            margin-top: 1rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 1rem;
+        }
+
+        .preview-item {
+            position: relative;
+            padding-top: 100%;
+            overflow: hidden;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .preview-item img {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .remove-btn {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background-color: rgba(255, 255, 255, 0.9);
+            border: none;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #dc3545;
+            font-weight: bold;
+        }
+
+        .send-btn {
+            width: 100%;
+            margin-top: 1rem;
+            padding: 0.8rem;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: background-color 0.3s ease;
+        }
+
+        .send-btn:hover {
+            background-color: #185abc;
+        }
+
+        .send-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .received-images {
+            margin-top: 1rem;
+        }
+
+        .received-images h3 {
+            margin-bottom: 1rem;
+            color: #1a73e8;
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 1rem;
+            background-color: #1a73e8;
+            color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Real-time Image Share</h1>
+        <p>Share images instantly with other devices</p>
+    </div>
+
+    <div class="container">
+        <div class="left-panel">
+            <div class="connection-status disconnected">Connecting...</div>
+            <div class="user-id"></div>
+            <input type="text" class="recipient-input" placeholder="Enter recipient's ID">
+            
+            <div class="drop-zone">
+                <span class="drop-zone-text">Drop images here or click to upload</span>
+            </div>
+
+            <div class="preview-container"></div>
+            <button class="send-btn" disabled>Send Images</button>
+        </div>
+
+        <div class="right-panel">
+            <h3>Received Images</h3>
+            <div class="received-images"></div>
+        </div>
+    </div>
+
+    <div class="notification"></div>
+
+    <script>
+        // Generate a random user ID
+        const userId = 'user_' + Math.random().toString(36).substr(2, 9);
+        
+        // WebSocket connection
+        const ws = new WebSocket(`wss://demo.piesocket.com/v3/channel_1?api_key=VCXCEuvhGcBDP7XhiJJUDvR1e1D3eiVjgZ9VRiaV&notify_self`);
+        
+        const dropZone = document.querySelector('.drop-zone');
+        const previewContainer = document.querySelector('.preview-container');
+        const sendButton = document.querySelector('.send-btn');
+        const recipientInput = document.querySelector('.recipient-input');
+        const connectionStatus = document.querySelector('.connection-status');
+        const userIdDisplay = document.querySelector('.user-id');
+        const receivedImages = document.querySelector('.received-images');
+        const notification = document.querySelector('.notification');
+        const uploadedFiles = new Set();
+
+        // Display user ID
+        userIdDisplay.textContent = `Your ID: ${userId}`;
+
+        // WebSocket event handlers
+        ws.onopen = () => {
+            connectionStatus.textContent = 'Connected';
+            connectionStatus.classList.remove('disconnected');
+            connectionStatus.classList.add('connected');
+        };
+
+        ws.onclose = () => {
+            connectionStatus.textContent = 'Disconnected';
+            connectionStatus.classList.remove('connected');
+            connectionStatus.classList.add('disconnected');
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.recipient === userId) {
+                showNotification('New image received!');
+                displayReceivedImage(data.image);
+            }
+        };
+
+        function showNotification(message) {
+            notification.textContent = message;
+            notification.style.display = 'block';
+            setTimeout(() => {
+                notification.style.display = 'none';
+            }, 3000);
+        }
+
+        function displayReceivedImage(dataUrl) {
+            const imgContainer = document.createElement('div');
+            imgContainer.className = 'preview-item';
+            
+            const img = document.createElement('img');
+            img.src = dataUrl;
+            
+            imgContainer.appendChild(img);
+            receivedImages.appendChild(imgContainer);
+        }
+
+        // Prevent default drag behaviors
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+            document.body.addEventListener(eventName, preventDefaults, false);
+        });
+
+        // Highlight drop zone when dragging over it
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        // Handle dropped files
+        dropZone.addEventListener('drop', handleDrop, false);
+        dropZone.addEventListener('click', () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.multiple = true;
+            input.accept = 'image/*';
+            input.onchange = (e) => {
+                handleFiles(e.target.files);
+            };
+            input.click();
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight(e) {
+            dropZone.classList.add('dragover');
+        }
+
+        function unhighlight(e) {
+            dropZone.classList.remove('dragover');
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+
+        function handleFiles(files) {
+            [...files].forEach(file => {
+                if (file.type.startsWith('image/')) {
+                    uploadedFiles.add(file);
+                    previewFile(file);
+                }
+            });
+            updateSendButton();
+        }
+
+        function previewFile(file) {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onloadend = () => {
+                const previewItem = document.createElement('div');
+                previewItem.className = 'preview-item';
+                
+                const img = document.createElement('img');
+                img.src = reader.result;
+                
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'remove-btn';
+                removeBtn.innerHTML = '×';
+                removeBtn.onclick = () => {
+                    uploadedFiles.delete(file);
+                    previewItem.remove();
+                    updateSendButton();
+                };
+
+                previewItem.appendChild(img);
+                previewItem.appendChild(removeBtn);
+                previewContainer.appendChild(previewItem);
+            };
+        }
+
+        function updateSendButton() {
+            sendButton.disabled = uploadedFiles.size === 0 || !recipientInput.value.trim();
+        }
+
+        recipientInput.addEventListener('input', updateSendButton);
+
+        sendButton.addEventListener('click', () => {
+            const recipient = recipientInput.value.trim();
+            if (!recipient) {
+                alert('Please enter a recipient ID');
+                return;
+            }
+
+            uploadedFiles.forEach(file => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onloadend = () => {
+                    const message = {
+                        sender: userId,
+                        recipient: recipient,
+                        image: reader.result
+                    };
+                    ws.send(JSON.stringify(message));
+                };
+            });
+
+            // Clear the preview container and uploaded files
+            previewContainer.innerHTML = '';
+            uploadedFiles.clear();
+            updateSendButton();
+            showNotification('Images sent successfully!');
+        });
+    </script>
+</body>
+</html>
